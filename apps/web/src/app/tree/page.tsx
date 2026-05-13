@@ -201,4 +201,3 @@ function TreeLineageView() {
   )
 }
 
-import clsx from 'clsx'
