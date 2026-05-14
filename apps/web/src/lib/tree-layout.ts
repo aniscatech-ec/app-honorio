@@ -1,12 +1,10 @@
+import dagre from 'dagre'
 import type { Person, Link, TreeLayout, TreeNode, TreeEdge, LinkType } from '@/types'
 
 export const NODE_W = 160
 export const NODE_H = 90
-export const RANK_SEP = 120
-export const NODE_SEP = 48
-const PARTNER_GAP = 24
-const MARGIN_X = 80
-const MARGIN_Y = 60
+export const RANK_SEP = 110
+export const NODE_SEP = 44
 
 const PARTNER_TYPES = new Set<LinkType>([
   'pareja', 'conyuge', 'divorciado', 'viudo',
@@ -21,24 +19,6 @@ const PARENT_TYPES = new Set<LinkType>([
   'abuelo', 'abuela', 'bisabuelo', 'bisabuela',
   'tatarabuelo', 'tatarabuela',
 ])
-
-function addTo(map: Map<string, string[]>, key: string, value: string) {
-  if (!map.has(key)) map.set(key, [])
-  if (!map.get(key)!.includes(value)) map.get(key)!.push(value)
-}
-
-function linkToParentChild(link: Link): { parentId: string; childId: string; type: LinkType } | null {
-  if (CHILD_TYPES.has(link.type)) {
-    return { parentId: link.from_id, childId: link.to_id, type: link.type }
-  }
-
-  // En estos tipos asumimos que from_id es el familiar mayor y to_id la persona relacionada.
-  if (PARENT_TYPES.has(link.type)) {
-    return { parentId: link.from_id, childId: link.to_id, type: link.type }
-  }
-
-  return null
-}
 
 /**
  * BFS to assign generation levels: 0 = root, negative = ancestors, positive = descendants.
@@ -58,10 +38,16 @@ function assignGenerations(
   const partnersOf = new Map<string, string[]>()
 
   for (const l of links) {
-    const pc = linkToParentChild(l)
-    if (pc) {
-      addTo(childrenOf, pc.parentId, pc.childId)
-      addTo(parentsOf, pc.childId, pc.parentId)
+    const addTo = (m: Map<string, string[]>, k: string, v: string) => {
+      if (!m.has(k)) m.set(k, [])
+      m.get(k)!.push(v)
+    }
+    if (CHILD_TYPES.has(l.type)) {
+      addTo(childrenOf, l.from_id, l.to_id)
+      addTo(parentsOf, l.to_id, l.from_id)
+    } else if (PARENT_TYPES.has(l.type)) {
+      addTo(childrenOf, l.from_id, l.to_id)
+      addTo(parentsOf, l.to_id, l.from_id)
     } else if (PARTNER_TYPES.has(l.type)) {
       addTo(partnersOf, l.from_id, l.to_id)
       addTo(partnersOf, l.to_id, l.from_id)
@@ -70,120 +56,24 @@ function assignGenerations(
 
   while (queue.length) {
     const { id, g } = queue.shift()!
-
-    for (const partnerId of partnersOf.get(id) ?? []) {
-      if (!visited.has(partnerId)) {
-        visited.add(partnerId)
-        gen.set(partnerId, g)
-        queue.push({ id: partnerId, g })
-      }
+    for (const pid of partnersOf.get(id) ?? []) {
+      if (!visited.has(pid)) { visited.add(pid); gen.set(pid, g); queue.push({ id: pid, g }) }
     }
-
-    for (const childId of childrenOf.get(id) ?? []) {
-      if (!visited.has(childId)) {
-        visited.add(childId)
-        gen.set(childId, g + 1)
-        queue.push({ id: childId, g: g + 1 })
-      }
+    for (const cid of childrenOf.get(id) ?? []) {
+      if (!visited.has(cid)) { visited.add(cid); gen.set(cid, g + 1); queue.push({ id: cid, g: g + 1 }) }
     }
-
-    for (const parentId of parentsOf.get(id) ?? []) {
-      if (!visited.has(parentId)) {
-        visited.add(parentId)
-        gen.set(parentId, g - 1)
-        queue.push({ id: parentId, g: g - 1 })
-      }
+    for (const parid of parentsOf.get(id) ?? []) {
+      if (!visited.has(parid)) { visited.add(parid); gen.set(parid, g - 1); queue.push({ id: parid, g: g - 1 }) }
     }
   }
 
-  for (const p of persons) {
-    if (!gen.has(p.id)) gen.set(p.id, 0)
-  }
-
+  for (const p of persons) { if (!gen.has(p.id)) gen.set(p.id, 0) }
   return gen
 }
 
-function buildPartnerComponents(ids: string[], links: Link[]): string[][] {
-  const idSet = new Set(ids)
-  const adjacency = new Map<string, string[]>()
-
-  for (const id of ids) adjacency.set(id, [])
-
-  for (const link of links) {
-    if (!PARTNER_TYPES.has(link.type)) continue
-    if (!idSet.has(link.from_id) || !idSet.has(link.to_id)) continue
-    addTo(adjacency, link.from_id, link.to_id)
-    addTo(adjacency, link.to_id, link.from_id)
-  }
-
-  const seen = new Set<string>()
-  const components: string[][] = []
-
-  for (const id of ids) {
-    if (seen.has(id)) continue
-    const queue = [id]
-    const component: string[] = []
-    seen.add(id)
-
-    while (queue.length) {
-      const current = queue.shift()!
-      component.push(current)
-      for (const next of adjacency.get(current) ?? []) {
-        if (!seen.has(next)) {
-          seen.add(next)
-          queue.push(next)
-        }
-      }
-    }
-
-    components.push(component)
-  }
-
-  return components
-}
-
-function componentWidth(component: string[]) {
-  return component.length * NODE_W + Math.max(0, component.length - 1) * PARTNER_GAP
-}
-
-function centerOfNodes(ids: string[], pos: Map<string, { x: number; y: number }>) {
-  const placed = ids.map(id => pos.get(id)).filter(Boolean) as { x: number; y: number }[]
-  if (!placed.length) return 0
-  return placed.reduce((sum, p) => sum + p.x + NODE_W / 2, 0) / placed.length
-}
-
-function pointsForFamilyEdge(
-  parentIds: string[],
-  childId: string,
-  pos: Map<string, { x: number; y: number }>,
-): [number, number][] | null {
-  const child = pos.get(childId)
-  if (!child) return null
-
-  const placedParents = parentIds
-    .map(id => pos.get(id))
-    .filter(Boolean) as { x: number; y: number }[]
-
-  if (!placedParents.length) return null
-
-  const parentCenterX = placedParents.reduce((sum, p) => sum + p.x + NODE_W / 2, 0) / placedParents.length
-  const parentBottomY = Math.max(...placedParents.map(p => p.y + NODE_H))
-  const childCenterX = child.x + NODE_W / 2
-  const childTopY = child.y
-  const midY = parentBottomY + Math.max(26, (childTopY - parentBottomY) / 2)
-
-  return [
-    [parentCenterX, parentBottomY],
-    [parentCenterX, midY],
-    [childCenterX, midY],
-    [childCenterX, childTopY],
-  ]
-}
-
 /**
- * Layout específico para árbol familiar.
- * Evita el efecto “telaraña” de un grafo genérico: agrupa parejas en la misma fila,
- * separa generaciones y dibuja conexiones ortogonales padre/madre → hijos.
+ * Build a dagre graph from persons + links, run layout, return TreeLayout.
+ * dagre places nodes in a layered directed graph — each generation = one rank.
  */
 export function computeLayout(
   persons: Person[],
@@ -192,137 +82,86 @@ export function computeLayout(
 ): TreeLayout {
   if (!persons.length) return { nodes: [], edges: [], width: 0, height: 0 }
 
-  const personMap = new Map(persons.map(p => [p.id, p]))
   const gen = assignGenerations(rootId, persons, links)
-  const pos = new Map<string, { x: number; y: number }>()
+  const personMap = new Map(persons.map(p => [p.id, p]))
 
-  const parentLinks = links
-    .map(linkToParentChild)
-    .filter(Boolean)
-    .filter(link => personMap.has(link!.parentId) && personMap.has(link!.childId)) as Array<{ parentId: string; childId: string; type: LinkType }>
+  // Build dagre graph
+  const g = new dagre.graphlib.Graph({ multigraph: false })
+  g.setGraph({
+    rankdir: 'TB',
+    ranksep: RANK_SEP,
+    nodesep: NODE_SEP,
+    edgesep: 10,
+    marginx: 40,
+    marginy: 40,
+  })
+  g.setDefaultEdgeLabel(() => ({}))
 
-  const parentsOf = new Map<string, string[]>()
-  for (const link of parentLinks) addTo(parentsOf, link.childId, link.parentId)
+  for (const p of persons) {
+    g.setNode(p.id, { width: NODE_W, height: NODE_H, label: p.id })
+  }
 
-  const generations = Array.from(new Set(Array.from(gen.values()))).sort((a, b) => a - b)
-  const minGeneration = generations[0] ?? 0
+  const edgesForLayout: Array<{ from: string; to: string; type: LinkType }> = []
 
-  // Orden estable y familiar: cada generación se ordena por el centro de sus padres si ya fueron ubicados.
-  for (const generation of generations) {
-    const ids = persons
-      .filter(p => gen.get(p.id) === generation)
-      .map(p => p.id)
+  for (const l of links) {
+    if (!personMap.has(l.from_id) || !personMap.has(l.to_id)) continue
 
-    const components = buildPartnerComponents(ids, links)
-      .map(component => ({
-        ids: component.sort((a, b) => {
-          if (a === rootId) return -1
-          if (b === rootId) return 1
-          return (personMap.get(a)?.born ?? '').localeCompare(personMap.get(b)?.born ?? '') || a.localeCompare(b)
-        }),
-        parentCenter: centerOfNodes(
-          Array.from(new Set(component.flatMap(id => parentsOf.get(id) ?? []))),
-          pos,
-        ),
-      }))
-      .sort((a, b) => {
-        const aHasParents = a.parentCenter !== 0
-        const bHasParents = b.parentCenter !== 0
-        if (aHasParents && bHasParents && a.parentCenter !== b.parentCenter) return a.parentCenter - b.parentCenter
-        if (a.ids.includes(rootId)) return -1
-        if (b.ids.includes(rootId)) return 1
-        return a.ids[0].localeCompare(b.ids[0])
-      })
-
-    const totalWidth = components.reduce((sum, component, index) => (
-      sum + componentWidth(component.ids) + (index > 0 ? NODE_SEP : 0)
-    ), 0)
-
-    let x = MARGIN_X - totalWidth / 2
-    const y = MARGIN_Y + (generation - minGeneration) * (NODE_H + RANK_SEP)
-
-    for (const component of components) {
-      for (const id of component.ids) {
-        pos.set(id, { x, y })
-        x += NODE_W + PARTNER_GAP
-      }
-      x += NODE_SEP - PARTNER_GAP
+    if (CHILD_TYPES.has(l.type) || PARENT_TYPES.has(l.type)) {
+      // Directed edge: parent → child (visual hierarchy drives layout)
+      const parentId = CHILD_TYPES.has(l.type) ? l.from_id : l.from_id
+      const childId = CHILD_TYPES.has(l.type) ? l.to_id : l.to_id
+      g.setEdge(parentId, childId, { id: l.id, type: l.type })
+      edgesForLayout.push({ from: parentId, to: childId, type: l.type })
+    } else if (PARTNER_TYPES.has(l.type)) {
+      // Partners: use a virtual edge with minlen=0 to keep them adjacent
+      g.setEdge(l.from_id, l.to_id, { id: l.id, type: l.type, minlen: 0 })
+      edgesForLayout.push({ from: l.from_id, to: l.to_id, type: l.type })
+    } else {
+      // Sibling / other relationships — include for context
+      g.setEdge(l.from_id, l.to_id, { id: l.id, type: l.type, minlen: 0 })
+      edgesForLayout.push({ from: l.from_id, to: l.to_id, type: l.type })
     }
   }
 
-  // Normaliza para que todo quede dentro del viewport positivo.
-  const minX = Math.min(...Array.from(pos.values()).map(p => p.x))
-  const minY = Math.min(...Array.from(pos.values()).map(p => p.y))
-  for (const p of pos.values()) {
-    p.x += MARGIN_X - minX
-    p.y += MARGIN_Y - minY
-  }
+  dagre.layout(g)
 
-  const nodes: TreeNode[] = persons.map(person => {
-    const p = pos.get(person.id) ?? { x: MARGIN_X, y: MARGIN_Y }
+  // Extract node positions
+  const nodes: TreeNode[] = persons.map(p => {
+    const n = g.node(p.id)
     return {
-      id: person.id,
-      person,
-      x: p.x,
-      y: p.y,
+      id: p.id,
+      person: p,
+      x: n ? n.x - NODE_W / 2 : 0,
+      y: n ? n.y - NODE_H / 2 : 0,
       width: NODE_W,
       height: NODE_H,
-      generation: gen.get(person.id) ?? 0,
+      generation: gen.get(p.id) ?? 0,
     }
   })
 
+  // Extract edges with points
   const edges: TreeEdge[] = []
-
-  // Parejas: línea horizontal limpia entre tarjetas.
-  for (const link of links) {
-    if (!PARTNER_TYPES.has(link.type)) continue
-    const from = pos.get(link.from_id)
-    const to = pos.get(link.to_id)
-    if (!from || !to) continue
-
-    const fromCenterX = from.x + NODE_W / 2
-    const toCenterX = to.x + NODE_W / 2
-    const y = from.y + NODE_H / 2
-    const left = fromCenterX <= toCenterX ? from : to
-    const right = fromCenterX <= toCenterX ? to : from
-
+  for (const e of g.edges()) {
+    const dEdge = g.edge(e)
+    if (!dEdge) continue
+    const points: [number, number][] = (dEdge.points ?? []).map(
+      (pt: { x: number; y: number }) => [pt.x, pt.y]
+    )
     edges.push({
-      id: link.id,
-      from: link.from_id,
-      to: link.to_id,
-      type: link.type,
-      points: [
-        [left.x + NODE_W, y],
-        [right.x, y],
-      ],
-    })
-  }
-
-  // Hijos: una sola conexión por hijo, aunque existan dos links padre/madre → hijo.
-  const children = Array.from(new Set(parentLinks.map(link => link.childId)))
-  for (const childId of children) {
-    const parentIds = parentsOf.get(childId) ?? []
-    const firstLink = parentLinks.find(link => link.childId === childId)
-    const points = pointsForFamilyEdge(parentIds, childId, pos)
-    if (!firstLink || !points) continue
-
-    edges.push({
-      id: `family-${parentIds.sort().join('-')}-${childId}`,
-      from: parentIds[0],
-      to: childId,
-      type: firstLink.type,
+      id: dEdge.id ?? `${e.v}-${e.w}`,
+      from: e.v,
+      to: e.w,
+      type: (dEdge.type ?? 'hijo') as LinkType,
       points,
     })
   }
 
-  const maxX = Math.max(...nodes.map(n => n.x + n.width))
-  const maxY = Math.max(...nodes.map(n => n.y + n.height))
-
+  const graph = g.graph()
   return {
     nodes,
     edges,
-    width: maxX + MARGIN_X,
-    height: maxY + MARGIN_Y,
+    width: (graph.width ?? 800) + 80,
+    height: (graph.height ?? 600) + 80,
   }
 }
 
