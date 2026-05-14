@@ -254,10 +254,7 @@ export default function ProfilePage() {
                 return (
                   <div key={`${ev.evId ?? ev.type}-${i}`} className="relative mb-3">
                     <div className="absolute left-[-24px] top-3.5 w-3.5 h-3.5 rounded-full border-2 border-bg1" style={{ background: m.dot, boxShadow: `0 0 0 2px ${m.dot}` }} />
-                        <div
-                            className="bg-card border border-bdr rounded-[8px] p-3 transition-all hover:border-[var(--hover-border)]"
-                            style={{ '--hover-border': m.dot } as React.CSSProperties}
-                        >
+                    <div className="bg-card border border-bdr rounded-[8px] p-3 transition-all hover:border-[var(--hover-border)]" style={{ '--hover-border': m.dot } as React.CSSProperties}>
                       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border" style={{ background: m.bg, color: m.tc, borderColor: m.dot + '33' }}>{m.label}</span>
                         <span className="text-[11px] text-ink3">{ev.dateLabel || '—'}</span>
